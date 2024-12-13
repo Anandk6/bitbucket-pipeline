@@ -1,0 +1,112 @@
+image: maven:latest
+
+pipelines:
+  default:
+    - step: &build-deploy
+        name: Build and Deploy Pipeline Service
+        caches:
+          - maven
+        script:
+          - echo "Building the Pipeline application..."
+          - mvn clean install -DskipTests
+
+          # Write the base64-decoded SSH key into a file
+          - mkdir -p ~/.ssh
+          - echo "$EC2_SSH_KEY" | base64 -d > ~/.ssh/id_rsa
+          - chmod 600 ~/.ssh/id_rsa
+
+          # Ensure known_hosts exists and add the server's SSH key to known_hosts
+          - ssh-keyscan -H $EC2_SERVER_IP >> ~/.ssh/known_hosts
+
+          # Use SCP to transfer the file to the EC2 instance
+          - scp -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa target/service.jar ubuntu@$EC2_SERVER_IP:/pathToFolder/${DEPLOY_ENV}
+
+          # Use SSH to execute commands on the EC2 instance
+          - |
+            ssh -o StrictHostKeyChecking=no -tt -i ~/.ssh/id_rsa ubuntu@$EC2_SERVER_IP << EOF
+              # Check for any running processes on port 8080 and kill if any
+              PID=\$(sudo netstat -nlp | grep :8080 | awk '{print \$7}' | cut -d/ -f1)
+              if [ -n "\$PID" ]; then
+                echo "Killing process with PID: \$PID"
+                sudo kill -9 \$PID
+                sudo rm -rf /pathToFolder/service.jar
+                if [ \$? -eq 0 ]; then
+                  echo "Removed old jar successfully"
+                else
+                  echo "Failed to remove old jar"
+                fi
+              
+                sudo mv /pathToFolder/service.jar /pathToFolder/service.jar
+                if [ \$? -eq 0 ]; then
+                  echo "Moving jar successfully"
+                else
+                  echo "Failed to Moving jar"
+                fi
+              
+                sudo rm -rf /pathToFolder/service.jar
+                if [ \$? -eq 0 ]; then
+                  echo "Deleting jar successfully"
+                else
+                  echo "Failed to Deleting jar"
+                fi
+              
+                echo "Starting java service"
+                sudo chmod 644 /pathToFolder/service.jar
+                sudo chown root:root /pathToFolder/service.jar
+                sudo nohup java -Duser.timezone=Asia/Dubai -jar /pathToFolder/service.jar > /dev/null 2>&1 &
+                echo "Exiting the session in 10 seconds..."
+
+                # Sleep for 5 seconds
+                sleep 5
+            
+                # Exit the session
+                exit
+              else
+                echo "No process running on port 8080"
+                sudo rm -rf /pathToFolder/service.jar
+                if [ \$? -eq 0 ]; then
+                  echo "Removed old jar successfully"
+                else
+                  echo "Failed to remove old jar"
+                fi
+            
+                sudo mv /pathToFolder/service.jar /pathToFolder/service.jar
+                if [ \$? -eq 0 ]; then
+                  echo "Moving jar successfully"
+                else
+                  echo "Failed to Moving jar"
+                fi
+            
+                sudo rm -rf /pathToFolder/service.jar
+                if [ \$? -eq 0 ]; then
+                  echo "Deleting jar successfully"
+                else
+                  echo "Failed to Deleting jar"
+                fi
+            
+                echo "Starting java service"
+                sudo chmod 644 /pathToFolder/service.jar
+                sudo chown root:root /pathToFolder/service.jar
+                sudo nohup java -jar /pathToFolder/service.jar > /dev/null 2>&1 &
+                echo "Exiting the session in 10 seconds..."
+
+                # Sleep for 5 seconds
+                sleep 5
+                
+                # Exit the session
+                exit
+              fi
+            EOF
+  branches:
+    dev:
+      - step:
+          name: Deploy to Staging
+          deployment: Staging
+          <<: *build-deploy
+          size: 2x
+    qa:
+      - step:
+          name: Deploy to QA
+          deployment: QA
+          <<: *build-deploy
+          size: 2x
